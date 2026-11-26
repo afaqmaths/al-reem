@@ -50,7 +50,7 @@ async function logout(){try{if(token)await api('/auth/v1/logout','POST')}catch{}
 function changePin(){if(!token)return;dlg.innerHTML='<h2>تغيير كلمة المرور</h2><form id="changeform"><label>كلمة مرور جديدة (12 حرفًا على الأقل)</label><input id="np" type="password" minlength="12" required autocomplete="new-password"><label>التأكيد</label><input id="cp" type="password" required><p id="err"></p><button class="primary" type="submit">حفظ</button> <button type="button" onclick="dlg.close()">إلغاء</button></form>';if(!dlg.open)dlg.showModal();$('#changeform').onsubmit=async e=>{e.preventDefault();let p=$('#np').value;if(p.length<12||p!==$('#cp').value){$('#err').textContent='تأكدي من طول الكلمة وتطابقها.';return}try{await api('/auth/v1/user','PUT',{password:p});dlg.close();alert('تم تغيير كلمة المرور.')}catch(e){$('#err').textContent=e.message}}}
 function parentCode(){alert('ربط حساب ولي الأمر يتطلب تفعيلًا مركزيًا من المشرف.')}
 async function saveAccount(id){if(role!=='admin'||!token||!validID(id))return;const active=$('#ust').value==='1';if(active&&!student(id).linked){await provisionStudent(id,$('#uname').value.trim());return}try{const rows=await api('/rest/v1/reem_students?student_no=eq.'+id,'PATCH',{display_name:$('#uname').value.trim(),active});if(!rows?.length)throw Error('لم يتم الحفظ');await loadPrivate();dlg.close();accounts()}catch(e){alert(e.message)}}
-function resetAccount(id){if(role!=='admin'||!token)return;alert('الحساب المرتبط يحتاج إلى إعادة تعيين آمنة من إدارة المصادقة. الحسابات الجديدة تُفعّل من زر الحفظ.');}
+async function resetAccount(id){if(role!=='admin'||!token||!validID(id)||reemBatchRunning)return;if(!confirm('إعادة إصدار رمز أولي من ثمانية أرقام للحساب '+id+'؟ سيُلغى الرمز السابق إذا لم تستخدم الطالبة حسابها بعد.'))return;try{const d=await studentAccountAction({action:'reissue',student_no:Number(id)});dlg.innerHTML='<h2>الرمز الأولي الجديد للحساب '+esc(id)+'</h2><p>احتفظ بالرمز في مكان آمن وسلّمه للطالبة أو ولي أمرها فقط. الرمز السابق لم يعد صالحًا.</p><input readonly id="initialSecret" type="password" autocomplete="off"><div class="actions"><button onclick="let x=document.getElementById(\'initialSecret\');x.type=x.type===\'password\'?\'text\':\'password\'">إظهار / إخفاء</button><button onclick="navigator.clipboard.writeText(document.getElementById(\'initialSecret\').value)">نسخ</button><button onclick="dlg.close();accounts()">إغلاق</button></div>';$('#initialSecret').value=d.temporary_password;if(!dlg.open)dlg.showModal()}catch(e){alert(e.message)}}
 
 async function studentAccountAction(payload){
  const res=await fetch(cloudURL+'/functions/v1/manage-student-account',{method:'POST',headers:{apikey:cloudKey,Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -65,30 +65,30 @@ function firstStudentPassword(){
  $('#firstForm').onsubmit=async e=>{e.preventDefault();const p=$('#firstPw').value;if(p.length<12||p!==$('#firstConfirm').value){$('#firstError').textContent='تحققي من طول كلمة المرور وتطابقها';return}try{await studentAccountAction({action:'change',password:p});profile.must_change_password=false;await loadPrivate();dlg.close();dashboard()}catch(e){$('#firstError').textContent=e.message}}
 }
 
-let reemBatchRunning=false, reemBatchStop=false, reemBatchRows=[];
-function bulkStudentDialog(){
+let reemBatchRunning=false, reemBatchStop=false, reemBatchRows=[], reemBatchMode='provision';
+function bulkStudentDialog(mode='provision'){
  if(role!=='admin'||!token||reemBatchRunning)return;
  if(reemBatchRows.length&&!confirm('توجد رموز من الدفعة السابقة. هل حفظتها بصورة آمنة وتريد بدء دفعة جديدة؟'))return;
- reemBatchRows=[];reemBatchStop=false;
+ reemBatchRows=[];reemBatchStop=false;reemBatchMode=mode==='reissue'?'reissue':'provision';const reset=reemBatchMode==='reissue';
  dlg.innerHTML='<h2>تفعيل مجموعة من حسابات الطالبات</h2><p>حددي نطاقًا لا يتجاوز 25 حسابًا في الدفعة. تُنشأ كلمة مرور مؤقتة مختلفة لكل طالبة وتجب مشاركتها بصورة خاصة. بعد الانتهاء احفظي كشف الرموز في مكان آمن قبل إغلاق النافذة.</p><label>أول رقم</label><input id="batchFirst" type="number" min="1000" max="1199" value="1000"><label>آخر رقم</label><input id="batchLast" type="number" min="1000" max="1199" value="1024"><p id="batchStatus" role="status">جاهز للتفعيل.</p><div class="actions"><button id="batchStart" class="primary" onclick="runStudentBatch()">تفعيل الدفعة</button><button onclick="reemBatchStop=true">إيقاف بعد الحساب الحالي</button><button id="batchDownload" onclick="downloadStudentBatch()" disabled>تحميل كشف الرموز الخاص</button><button onclick="closeStudentBatch()">إغلاق</button></div>';
- if(!dlg.open)dlg.showModal()
+ if(reset){dlg.querySelector('h2').textContent='إعادة إصدار الرموز الأولية';dlg.querySelector('p').textContent='اختر نطاق الحسابات المفعّلة التي لم يسبق استخدامها. سيُلغى الرمز السابق لكل حساب ناجح ويُصدر رمز من 8 أرقام. الحسابات التي دخلت أو اختارت كلمة مرور شخصية لن تتغير.';$('#batchLast').value='1014';$('#batchStart').textContent='إعادة إصدار الرموز';$('#batchStatus').textContent='جاهز لإعادة الإصدار.';}if(!dlg.open)dlg.showModal()
 }
 async function runStudentBatch(){
  if(role!=='admin'||!token||reemBatchRunning)return;
  const a=Number($('#batchFirst').value),b=Number($('#batchLast').value);
  if(!Number.isInteger(a)||!Number.isInteger(b)||a<1000||b>1199||b<a||b-a>=25){$('#batchStatus').textContent='حددي من 1 إلى 25 حسابًا ضمن النطاق 1000–1199.';return}
- if(!confirm('تفعيل الحسابات المحجوزة وغير المرتبطة في هذا النطاق؟'))return;
+ const reset=reemBatchMode==='reissue';if(!confirm(reset?'إلغاء الرموز الأولية السابقة للحسابات غير المستخدمة في هذا النطاق وإصدار رموز جديدة؟':'تفعيل الحسابات المحجوزة وغير المرتبطة في هذا النطاق؟'))return;
  reemBatchRunning=true;reemBatchStop=false;$('#batchStart').disabled=true;let fail=0,skip=0,created=0;
  try{for(let n=a;n<=b;n++){
  if(reemBatchStop||role!=='admin'||!token)break;
- if(student(String(n)).linked){skip++;continue}
- try{const data=await studentAccountAction({action:'provision',student_no:n,display_name:student(String(n)).name||''});reemBatchRows.push([n,data.temporary_password]);created++;$('#batchDownload').disabled=false;state.users[String(n)]={...student(String(n)),linked:true,active:true}}
- catch(e){fail++;if(/401|جلسة|403|تعذر الاتصال/.test(e.message)){reemBatchStop=true}}
- if($('#batchStatus'))$('#batchStatus').textContent='تم تفعيل '+created+'، موجود سابقًا '+skip+'، تعذّر '+fail+'؛ آخر حساب '+n;
- }}finally{reemBatchRunning=false;if($('#batchStart'))$('#batchStart').disabled=false;if($('#batchStatus'))$('#batchStatus').textContent='انتهت الدفعة: '+created+' حسابًا جديدًا، '+skip+' موجودًا، '+fail+' تعذّر. احفظي كشف الرموز الخاص.';try{await loadPrivate()}catch{}}
+ if(reset?!student(String(n)).linked||!student(String(n)).active:student(String(n)).linked){skip++;continue}
+ try{const data=await studentAccountAction({action:reset?'reissue':'provision',student_no:n,display_name:student(String(n)).name||''});reemBatchRows.push([n,data.temporary_password]);created++;$('#batchDownload').disabled=false;state.users[String(n)]={...student(String(n)),linked:true,active:true}}
+ catch(e){if(reset&&/سبق استخدامه|اختارت كلمة مرور|ليس مفعّل/.test(e.message)){skip++}else{fail++;if(/401|جلسة|403|تعذر الاتصال/.test(e.message)){reemBatchStop=true}}}
+ if($('#batchStatus'))$('#batchStatus').textContent=(reset?'تمت إعادة إصدار ':'تم تفعيل ')+created+'، تم تجاوز '+skip+'، تعذّر '+fail+'؛ آخر حساب '+n;
+ }}finally{reemBatchRunning=false;if($('#batchStart'))$('#batchStart').disabled=false;if($('#batchStatus'))$('#batchStatus').textContent='انتهت الدفعة: '+created+(reset?' رمزًا جديدًا، ':' حسابًا جديدًا، ')+skip+' تم تجاوزها، '+fail+' تعذّر. احفظ كشف الرموز الخاص.';try{await loadPrivate()}catch{}}
 }
 function downloadStudentBatch(){
  if(role!=='admin'||!token||!reemBatchRows.length)return;
- const csv='student_no,temporary_password\r\n'+reemBatchRows.map(x=>x[0]+','+x[1]).join('\r\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='reem-private-activation-'+Date.now()+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)
+ const csv='student_no,temporary_password\r\n'+reemBatchRows.map(x=>x[0]+','+x[1]).join('\r\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='reem-private-'+reemBatchMode+'-'+Date.now()+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)
 }
 function closeStudentBatch(){if(reemBatchRunning){alert('أوقفي الدفعة أولًا.');return}if(reemBatchRows.length&&!confirm('هل حفظت كشف الرموز الخاص؟'))return;reemBatchRows=[];dlg.close();accounts()}
