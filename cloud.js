@@ -41,13 +41,26 @@ function cloudLogin(want){
  $('#loginform').onsubmit=async e=>{e.preventDefault();const id=$('#sid').value.trim(),password=$('#pin').value;
  if(sm&&!validID(id)){$('#err').textContent='رقم الحساب غير صحيح';return}
  try{const login=await api('/auth/v1/token?grant_type=password','POST',{email:sm?'s'+id+'@students.al-reem.invalid':am&&id.toLowerCase()==='admin'?'admin@al-reem.example':id,password},false);token=login.access_token;
- profile=(await api('/rest/v1/reem_profiles?select=role,student_no'))?.[0];if(!profile||profile.role!==want)throw Error('لم يفعّل المشرف هذا الحساب لهذه البوابة.');
- role=profile.role;uid=String(profile.student_no??'');await loadPrivate();
+ profile=(await api('/rest/v1/reem_profiles?select=role,student_no,must_change_password'))?.[0];if(!profile||profile.role!==want)throw Error('لم يفعّل المشرف هذا الحساب لهذه البوابة.');
+ role=profile.role;uid=String(profile.student_no??'');if(role==='student'&&profile.must_change_password){firstStudentPassword();return}await loadPrivate();
  if((role==='student'||role==='parent')&&!state.users[uid]?.active)throw Error('الحساب غير مفعّل.');
  dlg.close();dashboard()}catch(e){token='';role='guest';uid='';profile=null;state.users={};state.results=[];$('#err').textContent=e.message||'تعذر تسجيل الدخول'}};
 }
 async function logout(){try{if(token)await api('/auth/v1/logout','POST')}catch{}token='';profile=null;role='guest';uid='';state.users={};state.results=[];$('#who').textContent='لوحتي';home()}
 function changePin(){if(!token)return;dlg.innerHTML='<h2>تغيير كلمة المرور</h2><form id="changeform"><label>كلمة مرور جديدة (12 حرفًا على الأقل)</label><input id="np" type="password" minlength="12" required autocomplete="new-password"><label>التأكيد</label><input id="cp" type="password" required><p id="err"></p><button class="primary" type="submit">حفظ</button> <button type="button" onclick="dlg.close()">إلغاء</button></form>';if(!dlg.open)dlg.showModal();$('#changeform').onsubmit=async e=>{e.preventDefault();let p=$('#np').value;if(p.length<12||p!==$('#cp').value){$('#err').textContent='تأكدي من طول الكلمة وتطابقها.';return}try{await api('/auth/v1/user','PUT',{password:p});dlg.close();alert('تم تغيير كلمة المرور.')}catch(e){$('#err').textContent=e.message}}}
 function parentCode(){alert('ربط حساب ولي الأمر يتطلب تفعيلًا مركزيًا من المشرف.')}
-async function saveAccount(id){if(role!=='admin'||!token||!validID(id))return;const active=$('#ust').value==='1';if(active&&!student(id).linked){alert('الحساب محجوز ولم يُربط بمستخدم مصادق عليه بعد.');return}try{const rows=await api('/rest/v1/reem_students?student_no=eq.'+id,'PATCH',{display_name:$('#uname').value.trim(),active});if(!rows?.length)throw Error('لم يتم الحفظ');await loadPrivate();dlg.close();accounts()}catch(e){alert(e.message)}}
-function resetAccount(){alert('إعادة تعيين كلمة المرور تحتاج إلى تفعيل إدارة المصادقة من المشرف.')}
+async function saveAccount(id){if(role!=='admin'||!token||!validID(id))return;const active=$('#ust').value==='1';if(active&&!student(id).linked){await provisionStudent(id,$('#uname').value.trim());return}try{const rows=await api('/rest/v1/reem_students?student_no=eq.'+id,'PATCH',{display_name:$('#uname').value.trim(),active});if(!rows?.length)throw Error('لم يتم الحفظ');await loadPrivate();dlg.close();accounts()}catch(e){alert(e.message)}}
+function resetAccount(id){if(role!=='admin'||!token)return;alert('الحساب المرتبط يحتاج إلى إعادة تعيين آمنة من إدارة المصادقة. الحسابات الجديدة تُفعّل من زر الحفظ.');}
+
+async function studentAccountAction(payload){
+ const res=await fetch(cloudURL+'/functions/v1/manage-student-account',{method:'POST',headers:{apikey:cloudKey,Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(payload)});
+ const data=await res.json();if(!res.ok)throw Error(data.message||'تعذر تنفيذ العملية');return data
+}
+async function provisionStudent(id,name){
+ if(!confirm('تفعيل الحساب '+id+' وإصدار رمز مؤقت خاص به؟'))return;
+ try{const data=await studentAccountAction({action:'provision',student_no:Number(id),display_name:name});await loadPrivate();dlg.innerHTML='<h2>تم تفعيل الحساب '+esc(id)+'</h2><p>تُسلّم كلمة المرور المؤقتة للطالبة أو ولي أمرها بصورة خاصة. يلزم تغييرها عند أول دخول.</p><input readonly id="initialSecret" type="password" autocomplete="off"><div class="actions"><button onclick="let x=document.getElementById(\'initialSecret\');x.type=x.type===\'password\'?\'text\':\'password\'">إظهار / إخفاء</button><button onclick="navigator.clipboard.writeText(document.getElementById(\'initialSecret\').value)">نسخ</button><button onclick="dlg.close();accounts()">إغلاق</button></div>';$('#initialSecret').value=data.temporary_password;if(!dlg.open)dlg.showModal()}catch(e){alert(e.message)}
+}
+function firstStudentPassword(){
+ dlg.innerHTML='<h2>تغيير كلمة المرور عند الدخول الأول</h2><p>اختاري كلمة مرور شخصية من 12 حرفًا على الأقل.</p><form id="firstForm"><label>كلمة المرور الجديدة</label><input id="firstPw" type="password" minlength="12" required autocomplete="new-password"><label>تأكيد كلمة المرور</label><input id="firstConfirm" type="password" minlength="12" required autocomplete="new-password"><p id="firstError" role="alert"></p><button type="submit" class="primary">حفظ ومتابعة</button><button type="button" onclick="dlg.close();logout()">خروج</button></form>';if(!dlg.open)dlg.showModal();
+ $('#firstForm').onsubmit=async e=>{e.preventDefault();const p=$('#firstPw').value;if(p.length<12||p!==$('#firstConfirm').value){$('#firstError').textContent='تحققي من طول كلمة المرور وتطابقها';return}try{await studentAccountAction({action:'change',password:p});profile.must_change_password=false;await loadPrivate();dlg.close();dashboard()}catch(e){$('#firstError').textContent=e.message}}
+}
