@@ -92,3 +92,22 @@ function downloadStudentBatch(){
  const csv='student_no,temporary_password\r\n'+reemBatchRows.map(x=>x[0]+','+x[1]).join('\r\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='reem-private-'+reemBatchMode+'-'+Date.now()+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)
 }
 function closeStudentBatch(){if(reemBatchRunning){alert('أوقفي الدفعة أولًا.');return}if(reemBatchRows.length&&!confirm('هل حفظت كشف الرموز الخاص؟'))return;reemBatchRows=[];dlg.close();accounts()}
+
+function supervisorResetDialog(id){
+ if(role!=='admin'||!token||!validID(id)||reemBatchRunning)return;
+ const u=student(id);if(!u.linked||!u.active){alert('هذا الحساب غير مفعّل. فعّله أولًا من إدارة الحسابات.');return}
+ dlg.innerHTML='<h2>تغيير الرقم السري للحساب '+esc(id)+'</h2><p>يمكن للمشرف تعيين رمز مؤقت جديد حتى بعد استخدام الطالبة لحسابها. لن تُحذف بياناتها أو نتائجها. ستُلزم بتغيير الرمز عند الدخول التالي.</p><form id="superResetForm"><label for="resetMode">طريقة تعيين الرمز</label><select id="resetMode"><option value="random">توليد عشوائي (8 أرقام)</option><option value="manual">اختيار 8 أرقام بنفسي</option></select><div id="manualPinFields" hidden><label for="manualPin">الرقم السري الجديد</label><input id="manualPin" type="password" inputmode="numeric" maxlength="8" autocomplete="new-password"><label for="manualPinAgain">تأكيد الرقم السري</label><input id="manualPinAgain" type="password" inputmode="numeric" maxlength="8" autocomplete="new-password"></div><p id="resetError" role="alert"></p><div class="actions"><button type="submit" id="resetSubmit" class="primary">تعيين رمز جديد</button><button type="button" onclick="dlg.close()">إلغاء</button></div></form>';
+ if(!dlg.open)dlg.showModal();
+ $('#resetMode').onchange=()=>{$('#manualPinFields').hidden=$('#resetMode').value!=='manual';$('#resetError').textContent='';};
+ $('#superResetForm').onsubmit=async e=>{
+  e.preventDefault();const manual=$('#resetMode').value==='manual',pin=$('#manualPin').value;
+  if(manual&&(!/^\d{8}$/.test(pin)||pin!==$('#manualPinAgain').value)){$('#resetError').textContent='أدخل 8 أرقام متطابقة في الخانتين.';return}
+  if(!confirm('تأكيد تغيير الرقم السري للحساب '+id+'؟ لن يعمل الرقم السري السابق بعد نجاح العملية.'))return;
+  const btn=$('#resetSubmit');btn.disabled=true;
+  try{
+   const d=await studentAccountAction({action:'reset',student_no:Number(id),...(manual?{pin}: {})});
+   dlg.innerHTML='<h2>تم تغيير الرقم السري للحساب '+esc(id)+'</h2><p>الرمز الجديد مؤقت. سلّمه للطالبة أو ولي أمرها بطريقة خاصة. لا تشاركه في كشف عام.</p><input readonly id="resetNewPin" type="password" autocomplete="off"><div class="actions"><button onclick="let x=document.getElementById(\'resetNewPin\');x.type=x.type===\'password\'?\'text\':\'password\'">إظهار / إخفاء</button><button onclick="navigator.clipboard.writeText(document.getElementById(\'resetNewPin\').value)">نسخ الرقم</button><button onclick="dlg.close();accounts()">إغلاق</button></div>';
+   $('#resetNewPin').value=d.temporary_password;
+  }catch(err){if($('#resetError'))$('#resetError').textContent=err.message||'تعذر تغيير الرقم السري';if(btn.isConnected)btn.disabled=false;}
+ };
+}
