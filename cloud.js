@@ -64,3 +64,31 @@ function firstStudentPassword(){
  dlg.innerHTML='<h2>تغيير كلمة المرور عند الدخول الأول</h2><p>اختاري كلمة مرور شخصية من 12 حرفًا على الأقل.</p><form id="firstForm"><label>كلمة المرور الجديدة</label><input id="firstPw" type="password" minlength="12" required autocomplete="new-password"><label>تأكيد كلمة المرور</label><input id="firstConfirm" type="password" minlength="12" required autocomplete="new-password"><p id="firstError" role="alert"></p><button type="submit" class="primary">حفظ ومتابعة</button><button type="button" onclick="dlg.close();logout()">خروج</button></form>';if(!dlg.open)dlg.showModal();
  $('#firstForm').onsubmit=async e=>{e.preventDefault();const p=$('#firstPw').value;if(p.length<12||p!==$('#firstConfirm').value){$('#firstError').textContent='تحققي من طول كلمة المرور وتطابقها';return}try{await studentAccountAction({action:'change',password:p});profile.must_change_password=false;await loadPrivate();dlg.close();dashboard()}catch(e){$('#firstError').textContent=e.message}}
 }
+
+let reemBatchRunning=false, reemBatchStop=false, reemBatchRows=[];
+function bulkStudentDialog(){
+ if(role!=='admin'||!token||reemBatchRunning)return;
+ if(reemBatchRows.length&&!confirm('توجد رموز من الدفعة السابقة. هل حفظتها بصورة آمنة وتريد بدء دفعة جديدة؟'))return;
+ reemBatchRows=[];reemBatchStop=false;
+ dlg.innerHTML='<h2>تفعيل مجموعة من حسابات الطالبات</h2><p>حددي نطاقًا لا يتجاوز 25 حسابًا في الدفعة. تُنشأ كلمة مرور مؤقتة مختلفة لكل طالبة وتجب مشاركتها بصورة خاصة. بعد الانتهاء احفظي كشف الرموز في مكان آمن قبل إغلاق النافذة.</p><label>أول رقم</label><input id="batchFirst" type="number" min="1000" max="1199" value="1000"><label>آخر رقم</label><input id="batchLast" type="number" min="1000" max="1199" value="1024"><p id="batchStatus" role="status">جاهز للتفعيل.</p><div class="actions"><button id="batchStart" class="primary" onclick="runStudentBatch()">تفعيل الدفعة</button><button onclick="reemBatchStop=true">إيقاف بعد الحساب الحالي</button><button id="batchDownload" onclick="downloadStudentBatch()" disabled>تحميل كشف الرموز الخاص</button><button onclick="closeStudentBatch()">إغلاق</button></div>';
+ if(!dlg.open)dlg.showModal()
+}
+async function runStudentBatch(){
+ if(role!=='admin'||!token||reemBatchRunning)return;
+ const a=Number($('#batchFirst').value),b=Number($('#batchLast').value);
+ if(!Number.isInteger(a)||!Number.isInteger(b)||a<1000||b>1199||b<a||b-a>=25){$('#batchStatus').textContent='حددي من 1 إلى 25 حسابًا ضمن النطاق 1000–1199.';return}
+ if(!confirm('تفعيل الحسابات المحجوزة وغير المرتبطة في هذا النطاق؟'))return;
+ reemBatchRunning=true;reemBatchStop=false;$('#batchStart').disabled=true;let fail=0,skip=0,created=0;
+ try{for(let n=a;n<=b;n++){
+ if(reemBatchStop||role!=='admin'||!token)break;
+ if(student(String(n)).linked){skip++;continue}
+ try{const data=await studentAccountAction({action:'provision',student_no:n,display_name:student(String(n)).name||''});reemBatchRows.push([n,data.temporary_password]);created++;$('#batchDownload').disabled=false;state.users[String(n)]={...student(String(n)),linked:true,active:true}}
+ catch(e){fail++;if(/401|جلسة|403|تعذر الاتصال/.test(e.message)){reemBatchStop=true}}
+ if($('#batchStatus'))$('#batchStatus').textContent='تم تفعيل '+created+'، موجود سابقًا '+skip+'، تعذّر '+fail+'؛ آخر حساب '+n;
+ }}finally{reemBatchRunning=false;if($('#batchStart'))$('#batchStart').disabled=false;if($('#batchStatus'))$('#batchStatus').textContent='انتهت الدفعة: '+created+' حسابًا جديدًا، '+skip+' موجودًا، '+fail+' تعذّر. احفظي كشف الرموز الخاص.';try{await loadPrivate()}catch{}}
+}
+function downloadStudentBatch(){
+ if(role!=='admin'||!token||!reemBatchRows.length)return;
+ const csv='student_no,temporary_password\r\n'+reemBatchRows.map(x=>x[0]+','+x[1]).join('\r\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download='reem-private-activation-'+Date.now()+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)
+}
+function closeStudentBatch(){if(reemBatchRunning){alert('أوقفي الدفعة أولًا.');return}if(reemBatchRows.length&&!confirm('هل حفظت كشف الرموز الخاص؟'))return;reemBatchRows=[];dlg.close();accounts()}
